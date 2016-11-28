@@ -48,6 +48,12 @@ getChainNames = mapM readChainName . toList . ProtoHeader.chains
 getBinderTypesNames :: ProtoHeader.Header -> [String]
 getBinderTypesNames = map uToString . toList . ProtoHeader.binder_types_names
 
+getSimulationName :: ProtoHeader.Header -> Maybe String
+getSimulationName h = uToString <$> ProtoHeader.simulation_name h
+
+getSimulationDescription :: ProtoHeader.Header -> Maybe String
+getSimulationDescription h = uToString <$> ProtoHeader.simulation_description h
+
 readBinder :: ProtoBinder.Binder -> Maybe BinderInfo
 readBinder ProtoBinder.Binder{..} = do
     binderType' <- BinderType . fromIntegral <$> binder_type

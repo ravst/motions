@@ -52,6 +52,7 @@ library
                        Bio.Motions.Input,
                        Bio.Motions.Format.ProtoStream,
                        Bio.Motions.Format.Handle,
+                       Bio.Motions.SingleFrameIO,
                        Bio.Motions.StateInitialisation
   other-modules:       Bio.Motions.Format.Proto.Callback,
                        Bio.Motions.Format.Proto.Callback.Type,
@@ -59,6 +60,7 @@ library
                        Bio.Motions.Format.Proto.Header.ChainDescription,
                        Bio.Motions.Format.Proto.Header.ChainDescription.BeadDescription,
                        Bio.Motions.Format.Proto.Header.ChainDescription.BeadDescription.Binding,
+                       Bio.Motions.Format.Proto.SimulationState,
                        Bio.Motions.Format.Proto.Keyframe,
                        Bio.Motions.Format.Proto.Keyframe.Binder,
                        Bio.Motions.Format.Proto.Keyframe.Chain,
