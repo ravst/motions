@@ -31,6 +31,7 @@ import Bio.Motions.Callback.Discover
 import Bio.Motions.Callback.StandardScore
 import Bio.Motions.Callback.GyrationRadius()
 import Bio.Motions.Format.Handle
+import Bio.Motions.SingleFrameIO
 import Bio.Motions.StateInitialisation
 import Bio.Motions.Output
 import Bio.Motions.Input
@@ -100,6 +101,53 @@ data Settings = Settings
     , initialisationSettings :: InitialisationSettings
     }
 
+-- | A minmalist set of parameters, that we need to create default settings
+data MinimalSettings = MinimalSettings
+    { outputPrefixM :: FilePath
+    , simulationNameM :: String
+    , simulationDescriptionM :: String
+    , numStepsM :: Int
+    , requestedCallbacksM :: [String]
+    , framesPerKFM :: Int
+    }
+
+makeDefaultSettings :: MinimalSettings -> Settings
+makeDefaultSettings MinimalSettings{..} = Settings
+    { runSettings=defaultRunSettings
+    , reprName="IOChain"
+    , scoreName="StandardScore"
+    , maxMoveRadSquared=2
+    , maxChainDistSquared=2
+    , initialisationSettings=defaultInitialisationSettings
+    } where
+        defaultRunSettings = RunSettings'
+            { outputPrefix=outputPrefixM
+            , simulationName=simulationNameM
+            , simulationDescription=simulationDescriptionM
+            , numSteps=numStepsM
+            , writeIntermediatePDB=True
+            , enableLogging=False
+            , verboseCallbacks=True
+            , simplePDB=False
+            , binaryOutput=False -- binary prefered
+            , framesPerKF=framesPerKFM
+            , requestedCallbacks=requestedCallbacksM
+            , freezePredicateString=Nothing
+            }
+        defaultInitialisationSettings = InitialisationSettings
+            { generateSettings=Nothing
+            , inputSettings=Just defaultInputSettings
+            }
+        defaultInputSettings = InputSettings
+            { inputFiles=[]
+            , metaFile=Nothing
+            , binaryInput=False
+            , ioInput'=Just ()
+            , moveSource="generate"
+            , skipFrames=0
+            }
+
+
 genericParseJSON' :: (Generic a, GFromJSON (Rep a)) => Value -> J.Parser a
 genericParseJSON' = genericParseJSON $ defaultOptions { fieldLabelModifier = labelModifier }
   where
@@ -128,6 +176,7 @@ genericParseJSON' = genericParseJSON $ defaultOptions { fieldLabelModifier = lab
             , ("chromosomeName", "name")
             , ("chromosomeLength", "length")
             , ("binaryInput", "binary-input")
+            , ("ioInput'", "io-input")
             , ("binderTypesNames", "binder-types-names")
             , ("skipFrames", "skip-frames")
             , ("moveSource", "move-source")
@@ -239,7 +288,17 @@ runSimulation Settings{..} = dispatchScore
               error "The state initialisation method (\"generate\" or \"load\") was not specified."
           (Just _, Just _) ->
               error "Both \"generate\" and \"load\" methods provided. Choose one."
-          (_, Just settings) -> if binaryInput settings
+          (_, Just settings) ->
+               if binaryInput settings && ioInput settings then error "Both \"ioInput\" and \"binaryInput\" requested. Choose One"
+               else if ioInput settings then do
+                   singleFrame <- either error id <$> readSingleFrameFromIO
+                   let Just dump = getDump singleFrame
+                   let Just chainNames = getChainNames singleFrame
+                   let Just binderTypesNames = getBinderTypesNames singleFrame
+                   unless (moveSource settings == "generate") $
+                       error "When reading state from i/o, only supported move source is \"generate\""
+                   dispatchOutput scoreProxy reprProxy random chainNames binderTypesNames MoveGenerator dump
+               else if binaryInput settings
                then withBinaryInput settings $ \prod chainNames binderTypesNames -> do
                   dump <- seekBinaryKF prod $ skipFrames settings
                   withProd settings prod chainNames binderTypesNames dump
@@ -293,11 +352,24 @@ main = do
     configFile <- execParser
                     (info (helper <*> inputFileParser)
                           (fullDesc <> progDesc "Perform a MCMC simulation of chromatin movements"))
-    config <- decodeFileEither configFile
+    config <- case configFile of
+                Just configFile' -> decodeFileEither configFile'
+                Nothing -> pure $ pure $ makeDefaultSettings defaultMinimalSettings
     either (error . show) run config
 
-inputFileParser :: O.Parser FilePath
-inputFileParser = strOption
+defaultMinimalSettings :: MinimalSettings
+defaultMinimalSettings = MinimalSettings
+    { outputPrefixM="/tmp/"
+    , simulationNameM="test"
+    , simulationDescriptionM="test simulation"
+    , numStepsM=1000
+    , requestedCallbacksM=[]
+    , framesPerKFM=100
+    }
+
+
+inputFileParser :: O.Parser (Maybe FilePath)
+inputFileParser = O.optional $ strOption
                   (long "config"
                   <> short 'c'
                   <> metavar "YAML-CONFIG-FILE"

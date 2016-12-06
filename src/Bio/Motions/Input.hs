@@ -19,11 +19,12 @@ module Bio.Motions.Input
 import Bio.Motions.Types
 import Bio.Motions.Utils.Random
 import Bio.Motions.Representation.Class
+import Bio.Motions.Callback.Class
 import Control.Monad.IO.Class
 import Control.Monad
 import Control.Monad.Trans.Maybe
 import Control.Monad.State.Strict
-import Bio.Motions.Callback.Class
+import Data.Maybe
 import GHC.Generics
 
 
@@ -31,9 +32,13 @@ data InputSettings = InputSettings
     { inputFiles :: [FilePath]
     , metaFile :: Maybe FilePath
     , binaryInput :: Bool
+    , ioInput' :: Maybe ()
     , moveSource :: String
     , skipFrames :: Int
     } deriving Generic
+
+ioInput :: InputSettings -> Bool
+ioInput settings = isJust $ ioInput' settings
 
 data ProdMove score = Stop | Skip | MakeMove Move score
 
