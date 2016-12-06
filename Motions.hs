@@ -353,8 +353,11 @@ main = do
                     (info (helper <*> inputFileParser)
                           (fullDesc <> progDesc "Perform a MCMC simulation of chromatin movements"))
     config <- case configFile of
-                Just configFile' -> decodeFileEither configFile'
-                Nothing -> pure $ pure $ makeDefaultSettings defaultMinimalSettings
+                (Just configFile', Nothing) -> decodeFileEither configFile'
+                (Nothing, Just minmalSettings) -> pure $ pure $ makeDefaultSettings minmalSettings
+                (Nothing, Nothing) -> putStrLn "No settings specified, runnnig with default settings" >>
+                                      (pure $ pure $ makeDefaultSettings defaultMinimalSettings)
+                (Just _, Just _) -> error "When specifying config file, do not specify any other options"
     either (error . show) run config
 
 defaultMinimalSettings :: MinimalSettings
@@ -368,9 +371,42 @@ defaultMinimalSettings = MinimalSettings
     }
 
 
-inputFileParser :: O.Parser (Maybe FilePath)
-inputFileParser = O.optional $ strOption
-                  (long "config"
-                  <> short 'c'
-                  <> metavar "YAML-CONFIG-FILE"
-                  <> help "File containing the configuration necessary to run the simulation.")
+inputFileParser :: O.Parser (Maybe FilePath, Maybe MinimalSettings)
+inputFileParser = (,) <$> (O.optional $ strOption
+                      (long "config"
+                      <> short 'c'
+                      <> metavar "YAML-CONFIG-FILE"
+                      <> help "File containing the configuration necessary to run the simulation."))
+                  <*> (O.optional (MinimalSettings <$>
+                      strOption
+                      (long "output"
+                      <> short 'o'
+                      <> metavar "OUTPUT-PREFIX"
+                      <> help "Directory to which all ouptput files will be written")
+                  <*> strOption
+                      (long "name"
+                      <> short 'n'
+                      <> metavar "SIMULATION-NAME"
+                      <> help "Name of the simulation")
+                  <*> strOption
+                      (long "description"
+                      <> short 'd'
+                      <> metavar "SIMULATION-DESCRIPTION"
+                      <> help "Simulation description")
+                  <*> O.option auto
+                     (long "steps"
+                     <> short 's'
+                     <> metavar "STEPS"
+                     <> help "Number of steps")
+                  <*> O.option auto
+                    (long "callbacks"
+                    <> short 'x'
+                    <> metavar "CALLBACKS"
+                    <> help "Enabled callbacks")
+                  <*> O.option auto
+                    (long "frames-per-kf"
+                    <> short 'f'
+                    <> metavar "FRAMES-PER-KF"
+                    <> help "Frames per keyframe")))
+
+
