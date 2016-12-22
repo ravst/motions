@@ -15,6 +15,7 @@ Portability : unportable
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE TupleSections #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 {-# OPTIONS_GHC -fno-warn-partial-type-signatures #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
@@ -99,6 +100,7 @@ data Settings = Settings
     , maxMoveRadSquared :: Int
     , maxChainDistSquared :: Int
     , initialisationSettings :: InitialisationSettings
+    , dumpLastFrame :: Bool
     }
 
 -- | A minmalist set of parameters, that we need to create default settings
@@ -119,6 +121,7 @@ makeDefaultSettings MinimalSettings{..} = Settings
     , maxMoveRadSquared=2
     , maxChainDistSquared=2
     , initialisationSettings=defaultInitialisationSettings
+    , dumpLastFrame=True
     } where
         defaultRunSettings = RunSettings'
             { outputPrefix=outputPrefixM
@@ -180,6 +183,7 @@ genericParseJSON' = genericParseJSON $ defaultOptions { fieldLabelModifier = lab
             , ("binderTypesNames", "binder-types-names")
             , ("skipFrames", "skip-frames")
             , ("moveSource", "move-source")
+            , ("dumpLastFrame", "dump-last-frame")
             ]
 
 instance FromJSON GenerateSettings where
@@ -204,6 +208,7 @@ instance FromJSON Settings where
                                        <*> v' .:? "max-move-radius" .!= 2
                                        <*> v' .:? "max-chain-segment-length" .!= 2
                                        <*> parseJSON v
+                                       <*> v' .:? "dump-last-frame" .!= False
     parseJSON invalid = typeMismatch "Object" invalid
 
 mkRunSettings :: RunSettings' -> backend -> producer -> E.RunSettings repr score backend producer
@@ -245,8 +250,13 @@ generate GenerateSettings{..} maxChainDistSquared = do
 {-# RULES "simulate @SlowChain @StandardScore @PDB @MWCIO/SPEC" E.simulate = simulate'SlowChain'StandardScore'PDB'MWCIO #-}
 {-# RULES "simulate @SlowChain @StandardScore @Bin @MWCIO/SPEC" E.simulate = simulate'SlowChain'StandardScore'Bin'MWCIO #-}
 
+data SimulationMetaData = SimulationMetaData
+    { mChainNames :: [String]
+    , mBinderTypesNames :: [String]
+    }
+
 {-# ANN runSimulation ("HLint: ignore Redundant guard" :: String) #-}
-runSimulation :: Settings -> IO Dump
+runSimulation :: Settings -> IO (Dump, SimulationMetaData)
 runSimulation Settings{..} = dispatchScore
   where
     dispatchScore
@@ -254,7 +264,7 @@ runSimulation Settings{..} = dispatchScore
         | otherwise = fail "Invalid score"
     {-# INLINE dispatchScore #-}
 
-    dispatchRepr :: _ => _ score -> IO Dump
+    dispatchRepr :: _ => _ score -> IO (Dump, SimulationMetaData)
     dispatchRepr scoreProxy
         | "IOChain" <- reprName = dispatchFastRepr scoreProxy (Proxy :: Proxy IOChainRepresentation)
         | "PureChain" <- reprName = dispatchFastRepr scoreProxy (Proxy :: Proxy PureChainRepresentation)
@@ -262,26 +272,26 @@ runSimulation Settings{..} = dispatchScore
         | otherwise = fail "Invalid representation"
     {-# INLINE dispatchRepr #-}
 
-    dispatchFastRepr :: _ => _ score -> _ repr -> IO Dump
+    dispatchFastRepr :: _ => _ score -> _ repr -> IO (Dump, SimulationMetaData)
     dispatchFastRepr scoreProxy reprProxy
         | (2, 2) <- (maxMoveRadSquared, maxChainDistSquared) = dispatchRandom scoreProxy reprProxy
         | otherwise = fail "Invalid maximum move radius or maximum chain distance: only sqrt(2) is allowed \
                             \ in IOChainRepresentation and PureChainRepresentation"
     {-# INLINE dispatchFastRepr #-}
 
-    dispatchSlowRepr :: _ => _ score -> IO Dump
+    dispatchSlowRepr :: _ => _ score -> IO (Dump, SimulationMetaData)
     dispatchSlowRepr scoreProxy =
         reifyNat (toInteger maxMoveRadSquared) $ \(Proxy :: Proxy r) ->
             reifyNat (toInteger maxChainDistSquared) $ \(Proxy :: Proxy d) ->
                 dispatchRandom scoreProxy (Proxy :: Proxy (SlowChainRepresentation r d))
     {-# INLINE dispatchSlowRepr #-}
 
-    dispatchRandom :: _ => _ score -> _ repr -> IO Dump
+    dispatchRandom :: _ => _ score -> _ repr -> IO (Dump, SimulationMetaData)
     dispatchRandom scoreProxy reprProxy
         | otherwise = dispatchInput scoreProxy reprProxy runMWCIO
     {-# INLINE dispatchRandom #-}
 
-    dispatchInput :: _ => _ score -> Proxy repr -> (forall a. m a -> IO a) -> IO Dump
+    dispatchInput :: _ => _ score -> Proxy repr -> (forall a. m a -> IO a) -> IO (Dump, SimulationMetaData)
     dispatchInput scoreProxy (reprProxy :: _ repr) (random :: forall a. m a -> IO a) =
         case (generateSettings, inputSettings) of
           (Nothing, Nothing) ->
@@ -310,7 +320,7 @@ runSimulation Settings{..} = dispatchScore
               dispatchOutput scoreProxy reprProxy random chainNames binderTypesNames MoveGenerator dump
       where
         InitialisationSettings{..} = initialisationSettings
-        withProd :: _ => InputSettings -> prod -> [String] -> [String] -> Dump -> IO Dump
+        withProd :: _ => InputSettings -> prod -> [String] -> [String] -> Dump -> IO (Dump, SimulationMetaData)
         withProd settings prod names binderTypesNames dump = case moveSource settings of
             "generate" -> dispatchOutput scoreProxy reprProxy random names binderTypesNames MoveGenerator dump
             "input" -> dispatchOutput scoreProxy reprProxy random names binderTypesNames prod dump
@@ -318,10 +328,10 @@ runSimulation Settings{..} = dispatchScore
     {-# INLINE dispatchInput #-}
 
     dispatchOutput :: _ => _ score -> _ repr -> (forall a. m a -> IO a)
-                        -> [String] -> [String] -> producer -> Dump -> IO Dump
+                        -> [String] -> [String] -> producer -> Dump -> IO (Dump, SimulationMetaData)
     dispatchOutput scoreProxy reprProxy random chainNames binderTypesNames producer dump
-        | binaryOutput = run $ openBinaryOutput framesPerKF outSettings dump
-        | otherwise = run $ openPDBOutput outSettings dump simplePDB writeIntermediatePDB
+        | binaryOutput = (,metaData) <$> (run $ openBinaryOutput framesPerKF outSettings dump)
+        | otherwise = (,metaData) <$> (run $ openPDBOutput outSettings dump simplePDB writeIntermediatePDB)
         where
             RunSettings'{..} = runSettings
             outSettings = OutputSettings{..}
@@ -329,6 +339,9 @@ runSimulation Settings{..} = dispatchScore
             run :: _ => IO backend -> IO Dump
             run open = bracket open closeBackend $ \backend ->
                 dispatchFinal scoreProxy reprProxy random backend producer dump
+
+            metaData :: SimulationMetaData
+            metaData = SimulationMetaData chainNames binderTypesNames
             {-# INLINE run #-}
     {-# INLINE dispatchOutput #-}
 
@@ -343,8 +356,10 @@ run settings@Settings{..} = do
     when (simplePDB runSettings) $
         putStrLn "Warning: when using \"simple-pdb-output: True\" with 3 or more different binder types \
                   \ it won't be possible to use the resulting output as initial state later."
-    _ <- runSimulation settings
-    -- TODO: do something with the dump?
+    (dump, SimulationMetaData{..})<- runSimulation settings
+    let RunSettings'{..} = runSettings
+    let frame = serialiseSingleFrame $ makeSingleFrame (Main.simulationName runSettings) (Main.simulationDescription runSettings) mBinderTypesNames mChainNames ([],[]) 0 dump
+    when dumpLastFrame $ writeSingleFrameToIO frame
     pure ()
 
 main :: IO ()
